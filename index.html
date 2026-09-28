@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Mes trajets">
+<title>Mes trajets</title>
+<style>
+  body { font-family: system-ui; background: #111; color: #eee; padding: 16px; margin: 0; }
+  .onglets { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding-bottom: 12px; }
+  .onglets button { background: #222; color: #eee; border: 1px solid #444; border-radius: 14px;
+                    padding: 12px 8px; font-size: 1em; }
+  .onglets button.actif { background: #eee; color: #111; font-weight: bold; }
+  .row { display: flex; gap: 12px; font-size: 1.05em; padding: 8px 0; border-bottom: 1px solid #333; }
+  .ligne { min-width: 3.5em; font-weight: bold; }
+  .retard { color: #f66; }
+  .ok { color: #6f6; }
+</style>
+</head>
+<body>
+<div class="onglets" id="onglets"></div>
+<h2 id="titre">Chargement…</h2>
+<div id="departs"></div>
+
+<script>
+// ===== SES TRAJETS =====
+const TRAJETS = [
+  { nom: "🚌 Bahnhof → Rötiboden", depart: "Wädenswil, Bahnhof",   arret: "Wädenswil, Rötiboden", type: "bus" },
+  { nom: "🚌 Rötiboden → Bahnhof", depart: "Wädenswil, Rötiboden", arret: "Wädenswil, Bahnhof",   type: "bus" },
+  { nom: "🚆 Wädenswil → Ziegelbrücke", depart: "Wädenswil",    arret: "Ziegelbrücke", type: "train" },
+  { nom: "🚆 Ziegelbrücke → Wädenswil", depart: "Ziegelbrücke", arret: "Wädenswil",    type: "train" },
+];
+// =======================
+
+const simple = s => (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+let choix = 0;
+try { choix = Number(localStorage.getItem("trajetFemme")) || 0; } catch (e) {}
+if (choix >= TRAJETS.length) choix = 0;
+
+function afficherOnglets() {
+  document.getElementById("onglets").innerHTML = TRAJETS.map((t, i) =>
+    `<button class="${i === choix ? "actif" : ""}" onclick="choisir(${i})">${t.nom}</button>`
+  ).join("");
+}
+
+function choisir(i) {
+  choix = i;
+  try { localStorage.setItem("trajetFemme", i); } catch (e) {}
+  afficherOnglets();
+  document.getElementById("departs").innerHTML = "";
+  charger();
+}
+
+async function charger() {
+  const t = TRAJETS[choix];
+  document.getElementById("titre").textContent = t.depart + " → " + t.arret;
+  const url = "https://transport.opendata.ch/v1/stationboard?limit=100"
+            + (t.type ? "&transportations[]=" + t.type : "")
+            + "&station=" + encodeURIComponent(t.depart);
+  const data = await (await fetch(url)).json();
+
+  const maintenant = Date.now();
+  const heure = d => new Date(d).toLocaleTimeString("fr-CH", {hour: "2-digit", minute: "2-digit"});
+
+  const liste = data.stationboard
+    .map(j => ({ j, arret: (j.passList || []).find(p => simple(p.station?.name).includes(simple(t.arret))) }))
+    .filter(x => x.arret);
+
+  if (liste.length === 0) {
+    const premier = data.stationboard[0];
+    const arrets = (premier?.passList || []).map(p => p.station?.name).join(" · ");
+    document.getElementById("departs").innerHTML = `
+      <p>Aucun départ vers ${t.arret} trouvé.</p>
+      <p><small>Diagnostic : ${data.stationboard.length} départs reçus depuis « ${data.station?.name || "?"} ».<br>
+      1er départ : ${premier ? premier.category + premier.number + " → " + premier.to : "aucun"}<br>
+      Ses arrêts : ${arrets || "(liste vide)"}</small></p>`;
+    return;
+  }
+
+  document.getElementById("departs").innerHTML = liste.map(({ j, arret }) => {
+    const prevu = new Date(j.stop.departure);
+    const reel = j.stop.prognosis?.departure ? new Date(j.stop.prognosis.departure) : prevu;
+    const minutes = Math.round((reel - maintenant) / 60000);
+    const retard = j.stop.delay;
+    const voie = j.stop.platform ? "voie " + j.stop.platform : "";
+    const aArret = arret.arrival || arret.departure;
+    return `<div class="row">
+      <span class="ligne">${j.category}${j.number}</span>
+      <span style="flex:1">${heure(j.stop.departure)} ${voie} → ${j.to}<br><small>à ${t.arret} ${aArret ? heure(aArret) : "?"}</small></span>
+      <span>${minutes <= 0 ? "maintenant" : minutes + " min"}</span>
+      <span class="${retard > 0 ? "retard" : "ok"}">${retard > 0 ? "+" + retard : "OK"}</span>
+    </div>`;
+  }).join("");
+}
+
+afficherOnglets();
+charger();
+setInterval(charger, 60000);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") charger();
+});
+</script>
+</body>
+</html>
